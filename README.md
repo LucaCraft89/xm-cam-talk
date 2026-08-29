@@ -145,9 +145,33 @@ Avoid embedding `/talk` in an **iframe** card: many reverse proxies send
 `X-Frame-Options: SAMEORIGIN` (blocking the embed), and browsers block the
 microphone inside a cross-origin iframe anyway.
 
-For **push-to-talk** (live mic), add a `button` with a `url` tap-action that
-opens `https://talk.example.com/talk?token=…` **full-screen** — the mic only
-works on a top-level page, not embedded.
+### Push-to-talk *inside* Home Assistant (custom card)
+
+Push-to-talk can run natively in the dashboard — no iframe, no external page —
+via a small custom card the bridge serves. It runs in HA's own origin, so the
+microphone works like on any HA page.
+
+1. Register the card as a Lovelace **resource** (Settings → Dashboards → ⋮ →
+   Resources, or via YAML): URL `https://talk.example.com/xm_ptt.js`, type
+   **JavaScript Module**.
+2. Add the card:
+   ```yaml
+   type: custom:xm-ptt-card
+   bridge: talk.example.com      # bridge host (behind your HTTPS proxy)
+   token: <TALK_TOKEN>           # if you set one
+   cameras: [cam2, cam3, cam4]   # or: camera: cam3
+   ```
+3. Hold the button and talk. The first use prompts for microphone permission
+   (grant it for your HA URL).
+
+> Requires HA to be served over **HTTPS** (secure context for the mic) and the
+> bridge reachable at `bridge` from the browser. If HA sets a strict
+> `Content-Security-Policy`, allow the bridge host in `script-src` and
+> `connect-src` (default HA has none).
+
+As a simpler fallback, a `button` with a `url` tap-action opening
+`https://talk.example.com/talk?token=…` **full-screen** also works — the mic
+only works on a top-level page, never embedded in an iframe.
 
 ## API
 
