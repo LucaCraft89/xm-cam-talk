@@ -216,6 +216,7 @@ async function loadCams(){
  catch(e){$("log").textContent="cannot reach bridge";}
 }
 loadCams();
+if(!window.isSecureContext||!navigator.mediaDevices){$("log").textContent="Open via https:// for push-to-talk (mic needs a secure context).";}
 $("speak").onclick=async()=>{
  const cam=$("cam").value,text=$("txt").value.trim();if(!text)return;
  $("log").textContent="speaking…";$("speak").disabled=true;
@@ -245,7 +246,12 @@ async function pttStart(){
    for(let i=0;i<n;i++){let v=inp[Math.floor(i*r)];v=Math.max(-1,Math.min(1,v));out[i]=v<0?v*32768:v*32767;}
    ws.send(out.buffer);};
   src.connect(node);node.connect(ctx.destination);
- }catch(e){$("log").textContent="mic error: "+e+" (needs HTTPS)";on=false;$("ptt").className="";$("ptt").innerHTML="&#127908; Hold to Talk";}
+ }catch(e){
+  let m="mic error: "+(e.name||e);
+  if(!window.isSecureContext||!navigator.mediaDevices) m="Not a secure context \u2014 open the https:// address in a real browser (not an in-app view).";
+  else if(e.name==="NotAllowedError") m="Microphone blocked. Tap the \ud83d\udd12 lock in the address bar \u2192 Microphone \u2192 Allow, reload, then hold again. On iOS: Settings \u2192 Safari \u2192 Microphone \u2192 Allow.";
+  else if(e.name==="NotFoundError") m="No microphone found on this device.";
+  $("log").textContent=m;on=false;$("ptt").className="";$("ptt").innerHTML="&#127908; Hold to Talk";}
 }
 function pttStop(){if(!on)return;on=false;$("ptt").className="";$("ptt").innerHTML="&#127908; Hold to Talk";$("log").textContent="idle";
  try{node.disconnect();stream.getTracks().forEach(t=>t.stop());ws.close();ctx.close();}catch(e){}}
