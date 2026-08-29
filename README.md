@@ -123,11 +123,31 @@ open so Home Assistant keeps working locally. Use the token in your URLs, e.g.
 
 ## 5. Home Assistant dashboard
 
-- **Text-to-speech** works embedded: add an **Iframe** card pointing at
-  `https://talk.example.com/talk?token=…`.
-- **Push-to-talk** needs the microphone, which browsers block inside a
-  cross-origin iframe. Add a **Button** card with a `url` tap-action opening the
-  same `/talk` URL full-screen, where the mic works.
+For **text-to-speech**, use the native `notify` entities (they call the bridge
+server-side over your LAN, so they work from anywhere the HA app does — no need
+to expose the bridge at all):
+
+1. Two helpers — an `input_select` (camera) and an `input_text` (message).
+2. A script that calls the notify entity for the selected camera:
+   ```yaml
+   sequence:
+     - action: notify.send_message
+       target:
+         entity_id: >-
+           notify.xm_talk_{{ states('input_select.xm_talk_camera') }}_{{ states('input_select.xm_talk_camera') }}
+       data:
+         message: "{{ states('input_text.xm_talk_message') }}"
+   ```
+3. A dashboard section: an `entities` card with the two helpers, plus a `button`
+   that runs the script.
+
+Avoid embedding `/talk` in an **iframe** card: many reverse proxies send
+`X-Frame-Options: SAMEORIGIN` (blocking the embed), and browsers block the
+microphone inside a cross-origin iframe anyway.
+
+For **push-to-talk** (live mic), add a `button` with a `url` tap-action that
+opens `https://talk.example.com/talk?token=…` **full-screen** — the mic only
+works on a top-level page, not embedded.
 
 ## API
 
