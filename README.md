@@ -21,12 +21,18 @@ button on your phone and talk live.
 
 - 🗣️ **Text-to-speech to a camera** — `notify.<camera>` with a message; the
   bridge renders it (espeak-ng) and plays it out the speaker.
-- 📢 **Play a WAV/any audio** — `POST /play` with an audio file (ffmpeg
-  transcodes to G.711 A-law 8 kHz automatically).
+- 📢 **Play any audio** — `POST /play` with a WAV/MP3/OGG/… file, or `POST
+  /play_url` with a link; ffmpeg transcodes to G.711 A-law 8 kHz automatically.
+- 📡 **Broadcast** — target one camera, a comma list, or `all` (`cam` accepts
+  `"all"`, `"cam2,cam3"`, or a JSON array). Plays to every camera at once.
+- ⏹️ **Stop** — `POST`/`GET /stop?cam=` kills TTS or media mid-playback instantly.
 - 🎙️ **Live hold-to-talk** — a minimal web page captures your browser mic and
   streams it to the speaker over WebSocket.
 - 🏠 **Home Assistant** — UI config-flow, auto-discovers cameras from the
-  bridge, a `notify` entity per camera. HACS-installable.
+  bridge, a `notify` entity per camera, and an all-in-one Lovelace card (TTS +
+  media + stop + broadcast + push-to-talk). HACS-installable.
+- ❤️ **Self-healing** — a `/healthz` endpoint plus the optional `autoheal`
+  service restart the bridge if it ever wedges (see `compose.example.yml`).
 - 🔒 **Local & credential-free in source** — camera credentials live only in
   your environment, never in the image or this repo.
 
@@ -69,11 +75,11 @@ that same tone coming back on the camera's microphone.
                          ┌──────────────────── this repo ───────────────────┐
 HA notify.<cam> ─────────┐
 (server-side, TTS)       │
-                         ├─► POST /say  (espeak-ng → G711A)  ─┐
-POST /play (any WAV) ────┤   POST /play (ffmpeg → G711A)      │
-                         │                                    ├─► DVRIP OPTalk ─► 🔊 camera
-xm-ptt-card (browser) ───┘   WS /ws (browser mic, s16le 8k)   ┘   (TCP 34567)     speaker
-   live push-to-talk         └───────── bridge (aiohttp, Docker) ──────────┘
+                         ├─► POST /say       (espeak-ng → G711A)  ─┐
+POST /play, /play_url ───┤   POST /play(_url) (ffmpeg → G711A)      │  cam=all
+                         │   POST /stop       (cancel mid-play)     ├─► DVRIP OPTalk ─► 🔊 camera(s)
+xm-ptt-card (browser) ───┘   WS /ws (browser mic, s16le 8k)        ┘   (TCP 34567)      speaker
+   live push-to-talk         └──────────── bridge (aiohttp, Docker) ───────────┘
 ```
 
 1. **bridge** (`/bridge`, Docker) — speaks OPTalk to the cameras and exposes a
@@ -254,67 +260,63 @@ Then add the card (`bridge` is your talk-bridge host, `token` only if you set
 
 ```yaml
 type: custom:xm-ptt-card
-title: Push-to-Talk
+title: Camera Talk
 bridge: talk.example.com
 token: YOUR_TALK_TOKEN
 cameras: [cam2, cam3, cam4]     # or a single: camera: cam3
+tts: true                       # show the text-to-speech box + Speak button
+media: true                     # show URL / file play buttons
+stop: true                      # show a Stop button (on by default when tts/media)
+# talk: true                    # push-to-talk (default true; set false to hide)
+# voice: en                     # espeak-ng voice for tts
 ```
+
+The one card does everything: a camera dropdown (with an **All cameras** option
+when you list more than one), a TTS box, MP3/WAV play from a URL or an uploaded
+file, a Stop button, and hold-to-talk. It runs in HA's own origin and calls the
+bridge directly, so it works locally **and** over the internet.
+
+| Option | Default | What it does |
+|--------|---------|--------------|
+| `bridge` | — (required) | talk-bridge host, e.g. `talk.example.com` |
+| `cameras` / `camera` | — (required) | list of cameras, or one camera |
+| `token` | — | your `TALK_TOKEN` (only if the bridge is proxied) |
+| `title` | `Camera Talk` | card header |
+| `talk` | `true` | push-to-talk button |
+| `tts` | `false` | text-to-speech box + Speak |
+| `media` | `false` | play from URL + play file |
+| `stop` | `tts \|\| media` | Stop button |
+| `voice` | `en` | espeak-ng voice for TTS |
 
 First use prompts for microphone permission — grant it for your HA URL. HA must
 be served over **HTTPS** (secure context for the mic). If HA sets a strict
 `Content-Security-Policy`, allow the bridge host in `script-src` / `connect-src`
 (default HA sets none).
 
-### Complete dashboard section
-
-The whole **Camera Talk** section — TTS controls, a Speak button, the live
-push-to-talk card, and a full-screen fallback button — as one `sections`-view
-grid (this is exactly the layout the setup above produces):
-
-```yaml
-type: grid
-cards:
-  - type: heading
-    heading: Camera Talk
-    icon: mdi:bullhorn
-  - type: entities
-    entities:
-      - entity: input_select.xm_talk_camera
-        name: Camera
-      - entity: input_text.xm_talk_message
-        name: Message
-  - type: button
-    name: Speak
-    icon: mdi:volume-high
-    tap_action:
-      action: perform-action
-      perform_action: script.xm_talk_speak
-  # live push-to-talk — needs the xm-ptt-card plugin installed
-  - type: custom:xm-ptt-card
-    title: Push-to-Talk
-    bridge: talk.example.com
-    token: YOUR_TALK_TOKEN
-    cameras: [cam2, cam3, cam4]
-  # fallback: opens the bridge's own /talk page full-screen (mic needs top-level)
-  - type: button
-    name: Push-to-Talk (full screen)
-    icon: mdi:microphone
-    tap_action:
-      action: url
-      url_path: https://talk.example.com/talk?token=YOUR_TALK_TOKEN
-```
+Prefer native HA helpers over the card? A `notify.<camera>` entity is created
+per camera, so `notify.send_message` (or a `script`) can speak to one camera
+without the card. The card is the way to get media/stop/broadcast in the UI.
 
 ## API
 
+`cam` may be a single name, a comma list, `all` / `*`, or a JSON array. Use
+`cams` interchangeably with `cam`.
+
 | Method | Path | Body | Effect |
 |-------:|------|------|--------|
-| `POST` | `/say` | `{"cam","text","voice"}` | TTS → speaker |
-| `POST` | `/play?cam=` | audio bytes (any ffmpeg format) | audio → speaker |
-| `GET`  | `/talk` | — | combined UI: camera dropdown + TTS + push-to-talk |
-| `GET`  | `/mic?cam=` | — | single-camera live-talk page |
+| `POST` | `/say` | `{"cam","text","voice"}` | TTS → speaker(s) |
+| `POST` | `/play?cam=` | audio bytes (WAV/MP3/OGG/…) | audio → speaker(s) |
+| `POST` | `/play_url` | `{"cam","url"}` | fetch a link → speaker(s) |
+| `POST`/`GET` | `/stop?cam=` | — | kill playback now (defaults to all if no cam) |
+| `GET`  | `/talk` | — | combined UI: dropdown + TTS + media + stop + push-to-talk |
+| `GET`  | `/mic?cam=` | — | alias of `/talk` |
+| `GET`  | `/xm_ptt.js` | — | the Lovelace card module |
 | `WS`   | `/ws?cam=` | binary s16le 8 kHz mono | mic → speaker |
-| `GET`  | `/cams` | — | list configured cameras |
-| `GET`  | `/healthz` | — | health check |
+| `GET`  | `/cams` | — | configured cameras + what's currently playing |
+| `GET`  | `/healthz` | — | health check (used by the container healthcheck) |
+
+Multi-cam responses return per-camera results:
+`{"ok":true,"cams":[...],"results":[{"ok":true,"cam":"cam3","stopped":false}, …]}`.
 
 ## Security notes
 

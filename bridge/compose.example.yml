@@ -6,7 +6,9 @@ services:
     # image: ghcr.io/lucacraft89/xm-cam-talk:latest
     container_name: talk-bridge
     network_mode: host           # needed to reach cameras on your LAN + bind :8090
-    restart: unless-stopped
+    restart: unless-stopped      # restarts on crash
+    labels:
+      - autoheal=true            # restarts on unhealthy (see autoheal service below)
     environment:
       # cam name -> [ip, dvrip_user, dvrip_pass]  (the per-device iCSee creds, NOT admin)
       CAMS: '{"cam3":["192.168.1.50","user","pass"]}'
@@ -15,3 +17,23 @@ services:
       # Generate one:  python3 -c "import secrets;print(secrets.token_urlsafe(24))"
       TALK_TOKEN: "change-me-to-a-long-random-string"
       # PORT: "8090"
+      # MAX_URL_BYTES: "20971520"   # cap for POST /play_url downloads (default 20 MiB)
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/healthz', timeout=3)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Optional: restarts any container marked `autoheal=true` when its healthcheck
+  # goes unhealthy (a wedged socket won't crash the process, so `restart:` alone
+  # won't catch it). Remove this service if you don't want it.
+  autoheal:
+    image: willfarrell/autoheal
+    container_name: autoheal
+    restart: unless-stopped
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: autoheal
+      AUTOHEAL_INTERVAL: "15"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
