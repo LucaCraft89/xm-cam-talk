@@ -148,13 +148,21 @@ microphone inside a cross-origin iframe anyway.
 ### Push-to-talk *inside* Home Assistant (custom card)
 
 Push-to-talk can run natively in the dashboard — no iframe, no external page —
-via a small custom card the bridge serves. It runs in HA's own origin, so the
-microphone works like on any HA page.
+via a companion custom card that runs in HA's own origin, so the microphone
+works like on any HA page.
 
-1. Register the card as a Lovelace **resource** (Settings → Dashboards → ⋮ →
-   Resources, or via YAML): URL `https://talk.example.com/xm_ptt.js`, type
-   **JavaScript Module**.
-2. Add the card:
+**Recommended — install via HACS:** add the
+**[xm-ptt-card](https://github.com/LucaCraft89/xm-ptt-card)** repo as a HACS
+*Dashboard* custom repository and install it. HACS serves it same-origin
+(`/hacsfiles/…`), so it loads identically on LAN and over the internet.
+
+**Manual alternative:** the bridge also serves the same card at `/xm_ptt.js`.
+Register it as a Lovelace **resource** (Settings → Dashboards → ⋮ → Resources):
+URL `https://talk.example.com/xm_ptt.js`, type **JavaScript Module**. (Note:
+loading it from the bridge host means it must be reachable from the browser,
+which the HACS install avoids.)
+
+Then add the card:
    ```yaml
    type: custom:xm-ptt-card
    bridge: talk.example.com      # bridge host (behind your HTTPS proxy)

@@ -280,7 +280,8 @@ class XmPttCard extends HTMLElement {
   }
   _render(){
     const cams=this._cfg.cameras||(this._cfg.camera?[this._cfg.camera]:[]);
-    const root=this.attachShadow({mode:"open"});
+    if(!this.shadowRoot) this.attachShadow({mode:"open"});
+    const root=this.shadowRoot;
     root.innerHTML=`
       <ha-card header="${this._cfg.title||"Push-to-Talk"}">
         <div style="padding:16px;display:flex;flex-direction:column;gap:12px">
@@ -339,7 +340,7 @@ class XmPttCard extends HTMLElement {
     try{this._node.disconnect();this._stream.getTracks().forEach(t=>t.stop());this._ws.close();this._ctx.close();}catch(e){}
   }
 }
-customElements.define("xm-ptt-card", XmPttCard);
+if(!customElements.get("xm-ptt-card")) customElements.define("xm-ptt-card", XmPttCard);
 window.customCards=window.customCards||[];
 window.customCards.push({type:"xm-ptt-card",name:"XM Push-to-Talk",description:"Hold-to-talk to XM/iCSee cameras via the talk bridge"});
 """
