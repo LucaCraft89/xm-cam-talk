@@ -32,18 +32,82 @@ button on your phone and talk live.
 
 ## How it works
 
+### The problem
+
+These cameras expose ONVIF and RTSP, but **neither carries a working audio
+back-channel** — a `DESCRIBE` with `Require: www.onvif.org/ver20/backchannel`
+is ignored, and the RTSP audio track is `recvonly` (the camera's mic only). So
+`go2rtc` / Frigate / the advanced-camera-card cannot talk *to* the camera. The
+iCSee/XMEye app can, because it uses the vendor's own protocol.
+
+### The protocol (DVRIP `OPTalk`)
+
+Two-way audio rides **DVRIP / Sofia** on **TCP 34567** — the same channel the
+app uses. Reverse-engineered and confirmed against an **iCSee** camera, model
+**`XM530V200_X6C-WEQ_8M`** (XM530 SoC, 8 MP dual-lens):
+
 ```
-HA notify / POST /say ─┐
-POST /play (wav)      ─┤→  bridge  ──DVRIP OPTalk (TCP 34567)──►  camera speaker
-browser mic → WS /ws ─┘   (aiohttp)     Claim 1434 → Start/data 1430
-                                        frames: 00 00 01 fa 0e 02 <u16 len> + G711A
+login (per-device iCSee user/pass; 'admin' is rejected)
+  → Claim   msgid 1434  {"Name":"OPTalk","OPTalk":{"Action":"Claim",
+                          "AudioFormat":{"EncodeType":"G711_ALAW",
+                          "SampleRate":8,"SampleBit":8,"BitRate":128}}}   → Ret 100
+  → Start   msgid 1430  (same JSON, Action:"Start")   ← camera now opens a
+                          DUPLEX channel and streams its own mic back
+  → audio   msgid 1430  frames:  00 00 01 fa 0e 02 <uint16-LE len> + G711A
+                          320-byte payloads (40 ms) paced in real time
+  → Stop    msgid 1434  Action:"Stop"
 ```
 
-Developed and confirmed against an **iCSee** camera — model
-**`XM530V200_X6C-WEQ_8M`** (XM530 SoC, 8 MP dual-lens) — the kind managed
-by the iCSee / XMEye mobile app. The talk channel is duplex —
-the camera streams its own mic back while you talk, which the bridge also uses
-to **self-test** the speaker (it can detect its own tone coming back).
+`msgid 1436` returns `Ret 102` (unsupported) — the data channel is **1430**,
+not 1436. Because the channel is duplex (the camera echoes its mic while you
+talk), the bridge can even **self-test** the speaker: play a tone, then detect
+that same tone coming back on the camera's microphone.
+
+### The pieces
+
+```
+                         ┌──────────────────── this repo ───────────────────┐
+HA notify.<cam> ─────────┐
+(server-side, TTS)       │
+                         ├─► POST /say  (espeak-ng → G711A)  ─┐
+POST /play (any WAV) ────┤   POST /play (ffmpeg → G711A)      │
+                         │                                    ├─► DVRIP OPTalk ─► 🔊 camera
+xm-ptt-card (browser) ───┘   WS /ws (browser mic, s16le 8k)   ┘   (TCP 34567)     speaker
+   live push-to-talk         └───────── bridge (aiohttp, Docker) ──────────┘
+```
+
+1. **bridge** (`/bridge`, Docker) — speaks OPTalk to the cameras and exposes a
+   small HTTP + WebSocket API. `espeak-ng` renders TTS, `ffmpeg` transcodes any
+   audio to G.711 A-law 8 kHz.
+2. **Home Assistant integration** (`/custom_components/xm_cam_talk`) — a config
+   flow that discovers cameras from the bridge and creates one
+   `notify.<camera>` entity each. `notify.send_message` → `POST /say`. This runs
+   **server-side**, so TTS works from anywhere HA does, without exposing the
+   bridge.
+3. **push-to-talk card**
+   ([xm-ptt-card](https://github.com/LucaCraft89/xm-ptt-card)) — a Lovelace card
+   that captures the **browser microphone** and streams 8 kHz PCM over a
+   WebSocket to `/ws`. It must run in HA's own origin (a custom card, **not** an
+   iframe — browsers block the mic in a cross-origin iframe), and needs the
+   bridge reachable over **HTTPS** from the browser.
+
+### Two audio paths
+
+- **Text-to-speech** — HA → bridge → camera, entirely server-side. No mic, no
+  bridge exposure needed; works over the internet through HA.
+- **Live push-to-talk** — browser mic → bridge → camera. Needs the bridge on
+  **HTTPS** (secure context + not mixed-content) and reachable from the browser.
+  Behind Cloudflare a plain WebSocket is fine (unlike WebRTC media). If HA is on
+  your LAN and the bridge host resolves to a public IP, add a split-horizon DNS
+  entry so LAN clients reach the reverse proxy directly (avoids NAT-hairpin).
+
+### Security
+
+The bridge has no login. Set **`TALK_TOKEN`** and it requires `?token=` for any
+request that arrives through a reverse proxy (detected via `X-Forwarded-For`),
+while direct LAN calls stay open so Home Assistant keeps working. Keep it on
+your LAN or behind an access list otherwise — anyone who can reach it can make
+your cameras talk.
 
 ## 1. Run the bridge
 
