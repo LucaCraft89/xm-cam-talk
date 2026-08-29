@@ -127,19 +127,42 @@ For **text-to-speech**, use the native `notify` entities (they call the bridge
 server-side over your LAN, so they work from anywhere the HA app does — no need
 to expose the bridge at all):
 
-1. Two helpers — an `input_select` (camera) and an `input_text` (message).
-2. A script that calls the notify entity for the selected camera:
-   ```yaml
-   sequence:
-     - action: notify.send_message
-       target:
-         entity_id: >-
-           notify.xm_talk_{{ states('input_select.xm_talk_camera') }}_{{ states('input_select.xm_talk_camera') }}
-       data:
-         message: "{{ states('input_text.xm_talk_message') }}"
-   ```
-3. A dashboard section: an `entities` card with the two helpers, plus a `button`
-   that runs the script.
+**a) Two helpers** (create as UI helpers, or in `configuration.yaml`):
+
+```yaml
+input_select:
+  xm_talk_camera:
+    name: XM Talk Camera
+    options: [cam2, cam3, cam4]   # your camera names, as configured on the bridge
+    icon: mdi:cctv
+
+input_text:
+  xm_talk_message:
+    name: XM Talk Message
+    max: 255
+    icon: mdi:message-text
+```
+
+**b) A script** (`scripts.yaml` → `script.xm_talk_speak`) that speaks the typed
+message out the selected camera. The integration names its entities
+`notify.xm_talk_<camera>_<camera>`, hence the doubled template:
+
+```yaml
+xm_talk_speak:
+  alias: XM Talk Speak
+  icon: mdi:bullhorn
+  mode: queued
+  max: 5
+  sequence:
+    - action: notify.send_message
+      target:
+        entity_id: >-
+          notify.xm_talk_{{ states('input_select.xm_talk_camera') }}_{{ states('input_select.xm_talk_camera') }}
+      data:
+        message: "{{ states('input_text.xm_talk_message') }}"
+```
+
+**c) A dashboard section** — see the complete YAML at the end of this section.
 
 Avoid embedding `/talk` in an **iframe** card: many reverse proxies send
 `X-Frame-Options: SAMEORIGIN` (blocking the embed), and browsers block the
@@ -162,24 +185,60 @@ URL `https://talk.example.com/xm_ptt.js`, type **JavaScript Module**. (Note:
 loading it from the bridge host means it must be reachable from the browser,
 which the HACS install avoids.)
 
-Then add the card:
-   ```yaml
-   type: custom:xm-ptt-card
-   bridge: talk.example.com      # bridge host (behind your HTTPS proxy)
-   token: <TALK_TOKEN>           # if you set one
-   cameras: [cam2, cam3, cam4]   # or: camera: cam3
-   ```
-3. Hold the button and talk. The first use prompts for microphone permission
-   (grant it for your HA URL).
+Then add the card (`bridge` is your talk-bridge host, `token` only if you set
+`TALK_TOKEN`):
 
-> Requires HA to be served over **HTTPS** (secure context for the mic) and the
-> bridge reachable at `bridge` from the browser. If HA sets a strict
-> `Content-Security-Policy`, allow the bridge host in `script-src` and
-> `connect-src` (default HA has none).
+```yaml
+type: custom:xm-ptt-card
+title: Push-to-Talk
+bridge: talk.example.com
+token: YOUR_TALK_TOKEN
+cameras: [cam2, cam3, cam4]     # or a single: camera: cam3
+```
 
-As a simpler fallback, a `button` with a `url` tap-action opening
-`https://talk.example.com/talk?token=…` **full-screen** also works — the mic
-only works on a top-level page, never embedded in an iframe.
+First use prompts for microphone permission — grant it for your HA URL. HA must
+be served over **HTTPS** (secure context for the mic). If HA sets a strict
+`Content-Security-Policy`, allow the bridge host in `script-src` / `connect-src`
+(default HA sets none).
+
+### Complete dashboard section
+
+The whole **Camera Talk** section — TTS controls, a Speak button, the live
+push-to-talk card, and a full-screen fallback button — as one `sections`-view
+grid (this is exactly the layout the setup above produces):
+
+```yaml
+type: grid
+cards:
+  - type: heading
+    heading: Camera Talk
+    icon: mdi:bullhorn
+  - type: entities
+    entities:
+      - entity: input_select.xm_talk_camera
+        name: Camera
+      - entity: input_text.xm_talk_message
+        name: Message
+  - type: button
+    name: Speak
+    icon: mdi:volume-high
+    tap_action:
+      action: perform-action
+      perform_action: script.xm_talk_speak
+  # live push-to-talk — needs the xm-ptt-card plugin installed
+  - type: custom:xm-ptt-card
+    title: Push-to-Talk
+    bridge: talk.example.com
+    token: YOUR_TALK_TOKEN
+    cameras: [cam2, cam3, cam4]
+  # fallback: opens the bridge's own /talk page full-screen (mic needs top-level)
+  - type: button
+    name: Push-to-Talk (full screen)
+    icon: mdi:microphone
+    tap_action:
+      action: url
+      url_path: https://talk.example.com/talk?token=YOUR_TALK_TOKEN
+```
 
 ## API
 
