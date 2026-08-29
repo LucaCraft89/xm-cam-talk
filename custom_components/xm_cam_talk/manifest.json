@@ -1,12 +1,14 @@
 {
   "domain": "xm_cam_talk",
   "name": "XM Camera Talk",
-  "codeowners": ["@LucaCraft89"],
+  "codeowners": [
+    "@LucaCraft89"
+  ],
   "config_flow": true,
   "documentation": "https://github.com/LucaCraft89/xm-cam-talk",
   "integration_type": "hub",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/LucaCraft89/xm-cam-talk/issues",
   "requirements": [],
-  "version": "1.0.0"
+  "version": "1.1.0"
 }
