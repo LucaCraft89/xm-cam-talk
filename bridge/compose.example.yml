@@ -10,4 +10,8 @@ services:
     environment:
       # cam name -> [ip, dvrip_user, dvrip_pass]  (the per-device iCSee creds, NOT admin)
       CAMS: '{"cam3":["192.168.1.50","user","pass"]}'
+      # Secret required for any request arriving via a reverse proxy (internet).
+      # LAN/direct requests are NOT gated, so Home Assistant keeps working locally.
+      # Generate one:  python3 -c "import secrets;print(secrets.token_urlsafe(24))"
+      TALK_TOKEN: "change-me-to-a-long-random-string"
       # PORT: "8090"

@@ -18,6 +18,18 @@ def sofia_hash(p):
 # cam -> (ip, user, pass). Override via CAMS env (JSON) if needed.
 # cam -> [ip, dvrip_user, dvrip_pass]. Set via CAMS env (JSON). No creds in source.
 CAMS=json.loads(os.environ.get("CAMS","{}"))
+TOKEN=os.environ.get("TALK_TOKEN","")  # if set, required for requests coming via a reverse proxy
+
+def _authed(req):
+    if not TOKEN:
+        return True
+    if "X-Forwarded-For" not in req.headers and "X-Real-IP" not in req.headers:
+        return True  # direct LAN access, no proxy
+    supplied = req.query.get("token") or req.headers.get("X-Talk-Token")
+    return supplied == TOKEN
+
+def _deny():
+    return web.json_response({"ok": False, "err": "unauthorized"}, status=401)
 
 def lin2alaw(s):
     SEG=[0x1F,0x3F,0x7F,0xFF,0x1FF,0x3FF,0x7FF,0xFFF]
@@ -119,6 +131,7 @@ def _push(cam, alaw):
         t.close()
 
 async def say(req):
+    if not _authed(req): return _deny()
     d=await req.json()
     cam=d.get("cam"); 
     if cam not in CAMS: return web.json_response({"ok":False,"err":"unknown cam"},status=400)
@@ -126,6 +139,7 @@ async def say(req):
     return web.json_response(await asyncio.to_thread(_push, cam, alaw))
 
 async def play(req):
+    if not _authed(req): return _deny()
     cam=req.query.get("cam")
     if cam not in CAMS: return web.json_response({"ok":False,"err":"unknown cam"},status=400)
     wav=await req.read()
@@ -133,6 +147,7 @@ async def play(req):
     return web.json_response(await asyncio.to_thread(_push, cam, alaw))
 
 async def ws_handler(req):
+    if not _authed(req): return web.Response(status=401,text="unauthorized")
     cam=req.query.get("cam")
     if cam not in CAMS: return web.Response(status=400,text="unknown cam")
     ws=web.WebSocketResponse(); await ws.prepare(req)
@@ -191,6 +206,8 @@ hr{border:0;border-top:1px solid #1e4d33;margin:1.4em 0}
 <script>
 const $=id=>document.getElementById(id);
 const base=location.origin;
+const TOKEN=new URLSearchParams(location.search).get("token")||"";
+const tq=TOKEN?("?token="+encodeURIComponent(TOKEN)):"";
 async function loadCams(){
  try{const r=await fetch(base+"/cams");const d=await r.json();
   $("cam").innerHTML=d.cams.map(c=>`<option>${c}</option>`).join("");
@@ -202,7 +219,7 @@ loadCams();
 $("speak").onclick=async()=>{
  const cam=$("cam").value,text=$("txt").value.trim();if(!text)return;
  $("log").textContent="speaking…";$("speak").disabled=true;
- try{const r=await fetch(base+"/say",{method:"POST",headers:{"content-type":"application/json"},
+ try{const r=await fetch(base+"/say"+tq,{method:"POST",headers:{"content-type":"application/json"},
    body:JSON.stringify({cam,text,voice:$("voice").value||"en"})});
   const d=await r.json();$("log").textContent=d.ok?("played "+(d.ms/1000).toFixed(1)+"s on "+cam):("error: "+JSON.stringify(d));}
  catch(e){$("log").textContent="error: "+e;}finally{$("speak").disabled=false;}
@@ -217,7 +234,7 @@ async function pttStart(){
   ctx=new (window.AudioContext||window.webkitAudioContext)();
   const src=ctx.createMediaStreamSource(stream);
   const proto=location.protocol==="https:"?"wss":"ws";
-  ws=new WebSocket(proto+"://"+location.host+"/ws?cam="+encodeURIComponent(cam));
+  ws=new WebSocket(proto+"://"+location.host+"/ws?cam="+encodeURIComponent(cam)+(TOKEN?("&token="+encodeURIComponent(TOKEN)):""));
   ws.binaryType="arraybuffer";
   ws.onopen=()=>$("log").textContent="live @"+ctx.sampleRate+"Hz → "+cam;
   ws.onerror=()=>$("log").textContent="ws error";
@@ -240,6 +257,7 @@ b.addEventListener("pointerleave",()=>{if(on)pttStop();});
 </script></body></html>"""
 
 async def talk_page(req):
+    if not _authed(req): return _deny()
     return web.Response(text=TALK_HTML, content_type="text/html")
 
 async def cams(req): return web.json_response({"cams":list(CAMS.keys())})

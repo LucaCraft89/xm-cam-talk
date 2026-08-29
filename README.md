@@ -103,14 +103,31 @@ enter the bridge URL (e.g. `http://192.168.1.186:8090`). You get one
 Pair it with HA's own TTS by posting the generated audio to `/play` if you
 prefer a nicer voice than espeak-ng.
 
-## 3. Live hold-to-talk
+## 3. Live push-to-talk
 
-Open `http://<bridge>:8090/mic?cam=front` and hold the button.
+Open `http://<bridge>:8090/talk` for the full UI: a **camera dropdown**, a
+**text-to-speech** box, and a **hold-to-talk** button.
 
 ⚠️ Browsers only allow microphone access over **HTTPS** (or `localhost`). To
-use it from a phone, put the bridge behind a reverse proxy with a certificate
-(Nginx Proxy Manager / NPMplus / Caddy / Traefik) and open the `https://…/mic`
-URL. Embed it in a dashboard with a *Webpage* card.
+use push-to-talk from a phone, put the bridge behind a reverse proxy with a
+certificate (Nginx Proxy Manager / NPMplus / Caddy / Traefik) and open the
+`https://…/talk` URL.
+
+## 4. Securing internet access
+
+The bridge has no login. If you expose it, set **`TALK_TOKEN`** (see
+`compose.example.yml`). Requests arriving through a reverse proxy then require
+`?token=<TALK_TOKEN>` (or an `X-Talk-Token` header); direct LAN requests stay
+open so Home Assistant keeps working locally. Use the token in your URLs, e.g.
+`https://talk.example.com/talk?token=…`.
+
+## 5. Home Assistant dashboard
+
+- **Text-to-speech** works embedded: add an **Iframe** card pointing at
+  `https://talk.example.com/talk?token=…`.
+- **Push-to-talk** needs the microphone, which browsers block inside a
+  cross-origin iframe. Add a **Button** card with a `url` tap-action opening the
+  same `/talk` URL full-screen, where the mic works.
 
 ## API
 
@@ -118,7 +135,8 @@ URL. Embed it in a dashboard with a *Webpage* card.
 |-------:|------|------|--------|
 | `POST` | `/say` | `{"cam","text","voice"}` | TTS → speaker |
 | `POST` | `/play?cam=` | audio bytes (any ffmpeg format) | audio → speaker |
-| `GET`  | `/mic?cam=` | — | live-talk web page |
+| `GET`  | `/talk` | — | combined UI: camera dropdown + TTS + push-to-talk |
+| `GET`  | `/mic?cam=` | — | single-camera live-talk page |
 | `WS`   | `/ws?cam=` | binary s16le 8 kHz mono | mic → speaker |
 | `GET`  | `/cams` | — | list configured cameras |
 | `GET`  | `/healthz` | — | health check |
