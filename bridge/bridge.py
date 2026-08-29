@@ -245,33 +245,43 @@ async def ws_handler(req):
     if not _authed(req):
         log.warning("ws DENIED (missing/bad token) from %s", src)
         return web.Response(status=401,text="unauthorized")
-    cam=req.query.get("cam")
-    if cam not in CAMS:
-        log.warning("ws unknown cam=%r from %s", cam, src)
+    cams=_resolve(req.query.get("cam"))   # supports "all"/list -> live broadcast
+    if not cams:
+        log.warning("ws unknown cam=%r from %s", req.query.get("cam"), src)
         return web.Response(status=400,text="unknown cam")
     ws=web.WebSocketResponse(); await ws.prepare(req)
-    ip,u,pw=CAMS[cam]
-    log.info("ws OPEN cam=%s from %s -> opening OPTalk to %s", cam, src, ip)
-    t=await asyncio.to_thread(lambda:(_mk(ip,u,pw)))
-    if not t:
-        log.warning("ws cam=%s OPTalk login FAILED", cam)
+    log.info("ws OPEN cams=%s from %s -> opening OPTalk", cams, src)
+    def _open_all():
+        out=[]
+        for c in cams:
+            ip,u,pw=CAMS[c]; t=_mk(ip,u,pw)
+            if t: out.append((c,t))
+            else: log.warning("ws cam=%s OPTalk login FAILED", c)
+        return out
+    sessions=await asyncio.to_thread(_open_all)
+    if not sessions:
         await ws.send_str('{"err":"login"}'); await ws.close(); return ws
-    total=0; t0=time.time()
+    def _send_all(alaw):
+        for c,t in sessions: t.send_alaw(alaw, False)
+    def _close_all():
+        for c,t in sessions:
+            t.stop(); t.close()
+    total=0; t0=time.time(); live=[c for c,_ in sessions]
     try:
         async for msg in ws:
             if msg.type==WSMsgType.BINARY:
                 total+=len(msg.data)
                 alaw=pcm16_to_alaw(msg.data)  # browser sends s16le 8k
-                await asyncio.to_thread(t.send_alaw, alaw, False)
+                await asyncio.to_thread(_send_all, alaw)
             elif msg.type==WSMsgType.TEXT and msg.data=="ping":
                 await ws.send_str("pong")
             elif msg.type==WSMsgType.ERROR:
-                log.warning("ws cam=%s error: %s", cam, ws.exception())
+                log.warning("ws cams=%s error: %s", live, ws.exception())
     except Exception as e:
-        log.exception("ws cam=%s stream error: %s", cam, e)
+        log.exception("ws cams=%s stream error: %s", live, e)
     finally:
-        await asyncio.to_thread(lambda:(t.stop(),t.close()))
-        log.info("ws CLOSE cam=%s from %s (%.1fs, %d pcm bytes)", cam, src, time.time()-t0, total)
+        await asyncio.to_thread(_close_all)
+        log.info("ws CLOSE cams=%s from %s (%.1fs, %d pcm bytes)", live, src, time.time()-t0, total)
     return ws
 
 def _mk(ip,u,pw):
@@ -368,7 +378,7 @@ $("stop").onclick=async()=>{
 // PTT
 let ctx,ws,node,stream,on=false;
 async function pttStart(){
- if(on)return;on=true;let cam=$("cam").value; if(cam==="all"){const r=await fetch(base+"/cams");cam=(await r.json()).cams[0];}
+ if(on)return;on=true;const cam=$("cam").value;  // "all" broadcasts live to every cam
  $("ptt").className="on";$("ptt").innerHTML="&#128308; Talking…";$("log").textContent="connecting…";
  try{
   stream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true}});
@@ -500,7 +510,6 @@ class XmPttCard extends HTMLElement {
     }catch(e){ L.textContent="⛔ stop failed: "+e; }
   }
   async _start(cam){
-    if(cam==="all"){ const cams=this._cfg.cameras||[this._cfg.camera]; cam=cams[0]; this._log("PTT can't broadcast; using "+cam); }
     if(this._on) return; this._on=true; this._opened=false;
     const L=this._els.log,B=this._els.ptt,host=this._host();
     B.style.background="#e67e22"; B.textContent="⏳ starting…";
