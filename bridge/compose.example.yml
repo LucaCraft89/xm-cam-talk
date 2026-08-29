@@ -1,0 +1,13 @@
+services:
+  talk-bridge:
+    # build from source:
+    build: .
+    # ...or use the prebuilt image (uncomment, comment out `build`):
+    # image: ghcr.io/lucacraft89/xm-cam-talk:latest
+    container_name: talk-bridge
+    network_mode: host           # needed to reach cameras on your LAN + bind :8090
+    restart: unless-stopped
+    environment:
+      # cam name -> [ip, dvrip_user, dvrip_pass]  (the per-device iCSee creds, NOT admin)
+      CAMS: '{"cam3":["192.168.1.50","user","pass"]}'
+      # PORT: "8090"

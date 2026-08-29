@@ -1,0 +1,21 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "XM Camera Talk",
+        "description": "Enter the URL of your talk-bridge service (the Docker container).",
+        "data": {
+          "bridge_url": "Bridge URL",
+          "voice": "TTS voice (espeak-ng, e.g. en, it, de)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach the bridge. Check the URL and that the container is running.",
+      "no_cams": "The bridge reported no cameras. Check the CAMS setting on the container."
+    },
+    "abort": {
+      "already_configured": "This bridge is already configured."
+    }
+  }
+}

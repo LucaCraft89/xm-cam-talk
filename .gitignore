@@ -1,0 +1,6 @@
+.env
+compose.override.yml
+compose.yml
+__pycache__/
+*.pyc
+*.bak
