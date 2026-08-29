@@ -3,10 +3,10 @@
 Two-way audio for cheap **XM / iCSee / Sofia** IP cameras (XM530, XMeye, the
 "dual-lens 8MP" boxes, etc.) — **without the app**.
 
-These cameras have a speaker, but their talk-back does **not** use ONVIF or an
-RTSP backchannel, so `go2rtc` / Frigate / the *advanced-camera-card* cannot
+These cameras (sold under the **iCSee** / XMEye apps) have a speaker, but
+their talk-back does **not** use ONVIF or an RTSP backchannel, so `go2rtc` / Frigate / the *advanced-camera-card* cannot
 drive it. The audio rides the proprietary **DVRIP `OPTalk`** channel (Sofia,
-TCP `34567`) — the same one the iCSee app uses. This project speaks that
+TCP `34567`) — the same channel the **iCSee** app uses for its talk button. This project speaks that
 protocol directly and exposes it as:
 
 - a tiny **Docker bridge** with an HTTP + WebSocket API, and
@@ -39,7 +39,9 @@ browser mic → WS /ws ─┘   (aiohttp)     Claim 1434 → Start/data 1430
                                         frames: 00 00 01 fa 0e 02 <u16 len> + G711A
 ```
 
-Confirmed against an XM530 8MP dual-lens camera. The talk channel is duplex —
+Developed and confirmed against an **iCSee** camera — model
+**`XM530V200_X6C-WEQ_8M`** (XM530 SoC, 8 MP dual-lens) — the kind managed
+by the iCSee / XMEye mobile app. The talk channel is duplex —
 the camera streams its own mic back while you talk, which the bridge also uses
 to **self-test** the speaker (it can detect its own tone coming back).
 
@@ -127,8 +129,9 @@ URL. Embed it in a dashboard with a *Webpage* card.
 
 ## Compatibility
 
-Works with XM-based cameras exposing DVRIP on port `34567` and reporting
-`PreviewFunction.Talk: true`. Yoosee / Hicam and other non-DVRIP firmwares are
+Works with **XM / iCSee / XMEye** cameras exposing DVRIP on port `34567` and
+reporting `PreviewFunction.Talk: true`. Tested model:
+`XM530V200_X6C-WEQ_8M` (8 MP dual-lens, iCSee app). Yoosee / Hicam and other non-DVRIP firmwares are
 **not** supported (no local talk protocol).
 
 ## License

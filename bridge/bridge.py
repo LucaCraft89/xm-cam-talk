@@ -157,41 +157,96 @@ def _mk(ip,u,pw):
     if not t.session: t.close(); return None
     t.start(); return t
 
-MIC_HTML="""<!doctype html><meta name=viewport content="width=device-width,initial-scale=1">
-<title>Talk %CAM%</title><style>body{background:#111;color:#eee;font:16px system-ui;text-align:center;padding:2em}
-button{font-size:1.4em;padding:1em 2em;border-radius:1em;border:0;background:#c33;color:#fff}
-button.on{background:#3a3}#s{margin-top:1em;color:#9ad}</style>
-<h2>%CAM%</h2><button id=b>Hold to Talk</button><div id=s>idle</div>
+TALK_HTML = r"""<!doctype html><html><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>Camera Talk</title><style>
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:#0b1a0f;color:#d7ffe6;font:16px/1.4 system-ui,sans-serif;padding:16px;max-width:560px;margin:0 auto}
+h1{font-size:1.1rem;color:#00ff6a;margin:.2em 0 .8em;font-weight:600}
+label{display:block;font-size:.8rem;color:#7fce9e;margin:.9em 0 .3em}
+select,textarea,input{width:100%;padding:.6em .7em;border-radius:.6em;border:1px solid #1e4d33;background:#0f2417;color:#d7ffe6;font:inherit}
+textarea{resize:vertical;min-height:3.2em}
+.row{display:flex;gap:.6em}.row>*{flex:1}
+button{border:0;border-radius:.7em;padding:.85em 1em;font:600 1rem system-ui;color:#04140b;cursor:pointer}
+#speak{background:#00ff6a;width:100%;margin-top:.9em}
+#ptt{background:#ff5252;color:#fff;width:100%;margin-top:.9em;user-select:none;touch-action:none}
+#ptt.on{background:#00c853;color:#04140b}
+#log{margin-top:1em;font-size:.8rem;color:#6fbf8f;min-height:1.2em}
+hr{border:0;border-top:1px solid #1e4d33;margin:1.4em 0}
+</style></head><body>
+<h1>&#128266; Camera Talk</h1>
+<label>Camera</label><select id=cam></select>
+<hr>
+<label>Text to speech</label>
+<textarea id=txt placeholder="Type a message to play out the camera speaker..."></textarea>
+<div class=row style="margin-top:.5em">
+  <div style="flex:0 0 90px"><label style="margin:0">Voice</label><input id=voice value="en" style="text-align:center"></div>
+  <div style="align-self:flex-end"><button id=speak>&#128227; Speak</button></div>
+</div>
+<hr>
+<label>Push to talk (hold)</label>
+<button id=ptt>&#127908; Hold to Talk</button>
+<div id=log>ready</div>
 <script>
-let ctx,ws,node,stream,on=false;const cam="%CAM%";
-async function start(){
- on=true;b.className="on";b.textContent="Talking…";s.textContent="connecting";
- stream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true}});
- ctx=new AudioContext();const src=ctx.createMediaStreamSource(stream);
- const proto=location.protocol==="https:"?"wss":"ws";
- ws=new WebSocket(proto+"://"+location.host+"/ws?cam="+cam);ws.binaryType="arraybuffer";
- ws.onopen=()=>s.textContent="live @"+ctx.sampleRate+"Hz";
- node=ctx.createScriptProcessor(2048,1,1);
- node.onaudioprocess=e=>{if(!on||ws.readyState!=1)return;
-  const inp=e.inputBuffer.getChannelData(0),r=ctx.sampleRate/8000;
-  const n=Math.floor(inp.length/r),out=new Int16Array(n);
-  for(let i=0;i<n;i++){let v=inp[Math.floor(i*r)];v=Math.max(-1,Math.min(1,v));out[i]=v<0?v*32768:v*32767;}
-  ws.send(out.buffer);};
- src.connect(node);node.connect(ctx.destination);}
-function stop(){on=false;b.className="";b.textContent="Hold to Talk";s.textContent="idle";
+const $=id=>document.getElementById(id);
+const base=location.origin;
+async function loadCams(){
+ try{const r=await fetch(base+"/cams");const d=await r.json();
+  $("cam").innerHTML=d.cams.map(c=>`<option>${c}</option>`).join("");
+  const q=new URLSearchParams(location.search).get("cam");
+  if(q&&d.cams.includes(q))$("cam").value=q;}
+ catch(e){$("log").textContent="cannot reach bridge";}
+}
+loadCams();
+$("speak").onclick=async()=>{
+ const cam=$("cam").value,text=$("txt").value.trim();if(!text)return;
+ $("log").textContent="speaking…";$("speak").disabled=true;
+ try{const r=await fetch(base+"/say",{method:"POST",headers:{"content-type":"application/json"},
+   body:JSON.stringify({cam,text,voice:$("voice").value||"en"})});
+  const d=await r.json();$("log").textContent=d.ok?("played "+(d.ms/1000).toFixed(1)+"s on "+cam):("error: "+JSON.stringify(d));}
+ catch(e){$("log").textContent="error: "+e;}finally{$("speak").disabled=false;}
+};
+// PTT
+let ctx,ws,node,stream,on=false;
+async function pttStart(){
+ if(on)return;on=true;const cam=$("cam").value;
+ $("ptt").className="on";$("ptt").textContent="&#128308; Talking… (release to stop)";$("ptt").innerHTML="&#128308; Talking…";$("log").textContent="connecting…";
+ try{
+  stream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true}});
+  ctx=new (window.AudioContext||window.webkitAudioContext)();
+  const src=ctx.createMediaStreamSource(stream);
+  const proto=location.protocol==="https:"?"wss":"ws";
+  ws=new WebSocket(proto+"://"+location.host+"/ws?cam="+encodeURIComponent(cam));
+  ws.binaryType="arraybuffer";
+  ws.onopen=()=>$("log").textContent="live @"+ctx.sampleRate+"Hz → "+cam;
+  ws.onerror=()=>$("log").textContent="ws error";
+  node=ctx.createScriptProcessor(2048,1,1);
+  node.onaudioprocess=e=>{if(!on||!ws||ws.readyState!=1)return;
+   const inp=e.inputBuffer.getChannelData(0),r=ctx.sampleRate/8000;
+   const n=Math.floor(inp.length/r),out=new Int16Array(n);
+   for(let i=0;i<n;i++){let v=inp[Math.floor(i*r)];v=Math.max(-1,Math.min(1,v));out[i]=v<0?v*32768:v*32767;}
+   ws.send(out.buffer);};
+  src.connect(node);node.connect(ctx.destination);
+ }catch(e){$("log").textContent="mic error: "+e+" (needs HTTPS)";on=false;$("ptt").className="";$("ptt").innerHTML="&#127908; Hold to Talk";}
+}
+function pttStop(){if(!on)return;on=false;$("ptt").className="";$("ptt").innerHTML="&#127908; Hold to Talk";$("log").textContent="idle";
  try{node.disconnect();stream.getTracks().forEach(t=>t.stop());ws.close();ctx.close();}catch(e){}}
-b.onpointerdown=start;b.onpointerup=stop;b.onpointerleave=()=>{if(on)stop()};
-</script>"""
+const b=$("ptt");
+b.addEventListener("pointerdown",e=>{e.preventDefault();pttStart();});
+b.addEventListener("pointerup",e=>{e.preventDefault();pttStop();});
+b.addEventListener("pointercancel",pttStop);
+b.addEventListener("pointerleave",()=>{if(on)pttStop();});
+</script></body></html>"""
 
-async def mic(req):
-    cam=req.query.get("cam","cam3")
-    return web.Response(text=MIC_HTML.replace("%CAM%",cam),content_type="text/html")
+async def talk_page(req):
+    return web.Response(text=TALK_HTML, content_type="text/html")
 
 async def cams(req): return web.json_response({"cams":list(CAMS.keys())})
 async def health(req): return web.json_response({"ok":True})
 
 app=web.Application(client_max_size=20*1024*1024)
 app.add_routes([web.post("/say",say),web.post("/play",play),web.get("/ws",ws_handler),
-                web.get("/mic",mic),web.get("/cams",cams),web.get("/healthz",health)])
+                web.get("/talk",talk_page),web.get("/mic",talk_page),web.get("/cams",cams),web.get("/healthz",health)])
 if __name__=="__main__":
     web.run_app(app, host="0.0.0.0", port=int(os.environ.get("PORT","8090")))
