@@ -268,6 +268,39 @@ reporting `PreviewFunction.Talk: true`. Tested model:
 `XM530V200_X6C-WEQ_8M` (8 MP dual-lens, iCSee app). Yoosee / Hicam and other non-DVRIP firmwares are
 **not** supported (no local talk protocol).
 
+## Logging & debugging
+
+Everything is verbose so you (and the debugger) can see what happens.
+
+**Home Assistant integration** — turn on debug logs:
+
+```yaml
+# configuration.yaml
+logger:
+  logs:
+    custom_components.xm_cam_talk: debug
+```
+
+Then **Settings → System → Logs**. You'll see the bridge probe on setup, each
+`Speaking on <cam> via <url>`, the bridge's reply, and clear errors (HTTP
+status + body) if a call fails.
+
+**Bridge (server)** — it logs every request:
+
+```bash
+docker logs -f talk-bridge
+```
+
+Lines like `say cam=cam3 chars=12`, `push cam=cam3 ip=… OK (1164ms)`,
+`ws OPEN cam=cam3 from …`, `ws CLOSE … (3.2s, 51200 pcm bytes)`, and
+`… DENIED (missing/bad token)` for rejected requests. Set `LOG_LEVEL: DEBUG`
+in the compose `environment:` for more detail.
+
+**Push-to-talk card** — open the browser dev-tools **Console**; every step is
+logged with a `[xm-ptt]` prefix (mic granted, ws connecting/open/close with the
+close code, seconds streamed), and the card's status line always shows the
+current state or the reason it failed.
+
 ## License
 
 MIT — see [LICENSE](LICENSE). Not affiliated with XM, iCSee, or Home Assistant.

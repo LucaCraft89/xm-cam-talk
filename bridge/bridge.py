@@ -7,8 +7,12 @@ Endpoints:
   WS   /ws?cam=cam3     binary 16-bit LE 8k mono PCM frames -> speaker
   GET  /cams  /healthz
 """
-import asyncio, hashlib, json, os, struct, subprocess, time
+import asyncio, hashlib, json, logging, os, struct, subprocess, time
 from aiohttp import web, WSMsgType
+
+logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+                    format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+log = logging.getLogger("xm-talk")
 
 CHARS="0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 def sofia_hash(p):
@@ -121,50 +125,76 @@ def _wav_to_alaw(wav):
 
 def _push(cam, alaw):
     ip,u,pw=CAMS[cam]
+    log.info("push cam=%s ip=%s bytes=%d (%.1fs)", cam, ip, len(alaw), len(alaw)/8000.0)
     t=OPTalk(ip,u,pw)
     try:
         r=t.login()
-        if not t.session: return {"ok":False,"err":"login failed","ret":r}
+        if not t.session:
+            log.warning("push cam=%s LOGIN FAILED ret=%s", cam, r)
+            return {"ok":False,"err":"login failed","ret":r}
         t.start(); t.send_alaw(alaw); t.stop()
+        log.info("push cam=%s OK (%dms audio)", cam, int(len(alaw)/8.0))
         return {"ok":True,"cam":cam,"ms":int(len(alaw)/8.0)}
+    except Exception as e:
+        log.exception("push cam=%s ERROR: %s", cam, e)
+        return {"ok":False,"err":str(e)}
     finally:
         t.close()
 
 async def say(req):
-    if not _authed(req): return _deny()
+    if not _authed(req):
+        log.warning("say DENIED (missing/bad token) from %s", req.headers.get("X-Forwarded-For", req.remote))
+        return _deny()
     d=await req.json()
+    log.info("say cam=%s chars=%d voice=%s", d.get("cam"), len(d.get("text","")), d.get("voice"))
     cam=d.get("cam"); 
     if cam not in CAMS: return web.json_response({"ok":False,"err":"unknown cam"},status=400)
     alaw=await asyncio.to_thread(_tts_to_alaw, d.get("text",""), d.get("voice","it"))
     return web.json_response(await asyncio.to_thread(_push, cam, alaw))
 
 async def play(req):
-    if not _authed(req): return _deny()
+    if not _authed(req):
+        log.warning("play DENIED (missing/bad token) from %s", req.headers.get("X-Forwarded-For", req.remote))
+        return _deny()
     cam=req.query.get("cam")
+    log.info("play cam=%s", cam)
     if cam not in CAMS: return web.json_response({"ok":False,"err":"unknown cam"},status=400)
     wav=await req.read()
     alaw=await asyncio.to_thread(_wav_to_alaw, wav)
     return web.json_response(await asyncio.to_thread(_push, cam, alaw))
 
 async def ws_handler(req):
-    if not _authed(req): return web.Response(status=401,text="unauthorized")
+    src=req.headers.get("X-Forwarded-For", req.remote)
+    if not _authed(req):
+        log.warning("ws DENIED (missing/bad token) from %s", src)
+        return web.Response(status=401,text="unauthorized")
     cam=req.query.get("cam")
-    if cam not in CAMS: return web.Response(status=400,text="unknown cam")
+    if cam not in CAMS:
+        log.warning("ws unknown cam=%r from %s", cam, src)
+        return web.Response(status=400,text="unknown cam")
     ws=web.WebSocketResponse(); await ws.prepare(req)
     ip,u,pw=CAMS[cam]
+    log.info("ws OPEN cam=%s from %s -> opening OPTalk to %s", cam, src, ip)
     t=await asyncio.to_thread(lambda:(_mk(ip,u,pw)))
-    if not t: 
+    if not t:
+        log.warning("ws cam=%s OPTalk login FAILED", cam)
         await ws.send_str('{"err":"login"}'); await ws.close(); return ws
-    loop=asyncio.get_event_loop()
+    total=0; t0=time.time()
     try:
         async for msg in ws:
             if msg.type==WSMsgType.BINARY:
+                total+=len(msg.data)
                 alaw=pcm16_to_alaw(msg.data)  # browser sends s16le 8k
                 await asyncio.to_thread(t.send_alaw, alaw, False)
             elif msg.type==WSMsgType.TEXT and msg.data=="ping":
                 await ws.send_str("pong")
+            elif msg.type==WSMsgType.ERROR:
+                log.warning("ws cam=%s error: %s", cam, ws.exception())
+    except Exception as e:
+        log.exception("ws cam=%s stream error: %s", cam, e)
     finally:
         await asyncio.to_thread(lambda:(t.stop(),t.close()))
+        log.info("ws CLOSE cam=%s from %s (%.1fs, %d pcm bytes)", cam, src, time.time()-t0, total)
     return ws
 
 def _mk(ip,u,pw):
@@ -268,18 +298,18 @@ async def talk_page(req):
 
 PTT_CARD_JS = r"""
 // XM PTT custom Lovelace card — runs in HA's origin so the mic works (no iframe).
+// Verbose: status shown to the user + console.debug("[xm-ptt] ...") for debugging.
 class XmPttCard extends HTMLElement {
   setConfig(cfg){
     if(!cfg.bridge) throw new Error("xm-ptt-card: 'bridge' (host) is required");
+    if(!cfg.cameras && !cfg.camera) throw new Error("xm-ptt-card: set 'cameras: [..]' or 'camera: ..'");
     this._cfg=cfg; this._on=false; this._render();
   }
   getCardSize(){ return 3; }
-  _url(scheme){
-    const b=this._cfg.bridge.replace(/^https?:\/\//,"").replace(/\/$/,"");
-    return scheme+"://"+b;
-  }
+  _log(m){ try{ console.debug("%c[xm-ptt]","color:#0a8;font-weight:bold",m); }catch(e){} }
+  _host(){ return this._cfg.bridge.replace(/^wss?:\/\//,"").replace(/^https?:\/\//,"").replace(/\/$/,""); }
   _render(){
-    const cams=this._cfg.cameras||(this._cfg.camera?[this._cfg.camera]:[]);
+    const cams=this._cfg.cameras||[this._cfg.camera];
     if(!this.shadowRoot) this.attachShadow({mode:"open"});
     const root=this.shadowRoot;
     root.innerHTML=`
@@ -289,55 +319,91 @@ class XmPttCard extends HTMLElement {
              ${cams.map(c=>`<option>${c}</option>`).join("")}</select>`:``}
           <button id=ptt style="border:0;border-radius:.8em;padding:1.1em;font:600 1.05rem system-ui;color:#fff;background:#c0392b;user-select:none;touch-action:none;cursor:pointer">
             🎙️ Hold to Talk${cams.length===1?` — ${cams[0]}`:``}</button>
-          <div id=log style="font-size:.85rem;color:var(--secondary-text-color);min-height:1.2em">ready</div>
+          <div id=log style="font-size:.85rem;color:var(--secondary-text-color);min-height:1.2em;word-break:break-word">ready</div>
         </div>
       </ha-card>`;
     const $=id=>root.getElementById(id);
     this._els={ptt:$("ptt"),log:$("log"),cam:$("cam")};
+    if(!window.isSecureContext) this._els.log.textContent="⚠️ Open Home Assistant over https:// — the mic needs a secure context.";
     const camOf=()=> this._els.cam? this._els.cam.value : cams[0];
     const b=this._els.ptt;
     b.addEventListener("pointerdown",e=>{e.preventDefault();this._start(camOf());});
-    b.addEventListener("pointerup",e=>{e.preventDefault();this._stop();});
-    b.addEventListener("pointercancel",()=>this._stop());
-    b.addEventListener("pointerleave",()=>{if(this._on)this._stop();});
+    b.addEventListener("pointerup",e=>{e.preventDefault();this._end("idle");});
+    b.addEventListener("pointercancel",()=>this._end("idle"));
+    b.addEventListener("pointerleave",()=>{if(this._on)this._end("idle");});
   }
   async _start(cam){
-    if(this._on)return; this._on=true;
-    const L=this._els.log,B=this._els.ptt;
-    B.style.background="#27ae60"; B.textContent="🔴 Talking…"; L.textContent="connecting…";
+    if(this._on) return; this._on=true; this._opened=false;
+    const L=this._els.log,B=this._els.ptt,host=this._host();
+    B.style.background="#e67e22"; B.textContent="⏳ starting…";
+    L.textContent="requesting microphone…"; this._log("start cam="+cam+" host="+host);
     try{
       this._stream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true}});
-      this._ctx=new (window.AudioContext||window.webkitAudioContext)();
-      const src=this._ctx.createMediaStreamSource(this._stream);
-      const tok=this._cfg.token?("&token="+encodeURIComponent(this._cfg.token)):"";
-      this._ws=new WebSocket(this._url("wss")+"/ws?cam="+encodeURIComponent(cam)+tok);
-      this._ws.binaryType="arraybuffer";
-      this._ws.onopen=()=>{L.textContent="live → "+cam;};
-      this._ws.onerror=()=>{L.textContent="connection error";};
-      this._node=this._ctx.createScriptProcessor(2048,1,1);
-      this._node.onaudioprocess=e=>{
-        if(!this._on||!this._ws||this._ws.readyState!=1)return;
-        const inp=e.inputBuffer.getChannelData(0),r=this._ctx.sampleRate/8000;
-        const n=Math.floor(inp.length/r),out=new Int16Array(n);
-        for(let i=0;i<n;i++){let v=inp[Math.floor(i*r)];v=Math.max(-1,Math.min(1,v));out[i]=v<0?v*32768:v*32767;}
-        this._ws.send(out.buffer);
-      };
-      src.connect(this._node); this._node.connect(this._ctx.destination);
+      this._log("microphone granted");
     }catch(err){
-      let m="mic error: "+(err.name||err);
-      if(err.name==="NotAllowedError") m="Microphone blocked — allow it for this site, then hold again.";
-      else if(err.name==="NotFoundError") m="No microphone on this device.";
-      else if(!window.isSecureContext) m="Open Home Assistant over https for the mic.";
-      L.textContent=m; this._on=false; B.style.background="#c0392b";
-      B.textContent="🎙️ Hold to Talk"+((this._cfg.cameras||[]).length===1?" — "+this._cfg.cameras[0]:"");
+      const nm=(err&&err.name)||err; this._log("mic error: "+nm);
+      let m="mic error: "+nm;
+      if(nm==="NotAllowedError") m="🔒 Microphone blocked. Allow it for this site (address-bar lock → Microphone → Allow), then hold again.";
+      else if(nm==="NotFoundError") m="No microphone found on this device.";
+      else if(!window.isSecureContext||!navigator.mediaDevices) m="⚠️ Not a secure context — open HA over https://.";
+      L.textContent=m; this._end(); return;
     }
+    const tok=this._cfg.token?("&token="+encodeURIComponent(this._cfg.token)):"";
+    const url="wss://"+host+"/ws?cam="+encodeURIComponent(cam)+tok;
+    L.textContent="connecting to "+host+" …"; this._log("ws connecting to "+host+(tok?" (with token)":" (no token)"));
+    try{ this._ws=new WebSocket(url); }
+    catch(e){ this._log("ws ctor failed: "+e); L.textContent="⛔ Bad bridge address: "+host; this._end(); return; }
+    this._ws.binaryType="arraybuffer";
+    this._timer=setTimeout(()=>{
+      if(this._opened) return;
+      this._log("ws OPEN timeout (8s) — bridge unreachable");
+      L.textContent="⚠️ No response from the bridge ("+host+"). On home Wi-Fi this is usually DNS/hairpin — see the card README. On mobile data it should connect.";
+      this._end();
+    },8000);
+    this._ws.onopen=()=>{ this._opened=true; clearTimeout(this._timer); this._log("ws OPEN → streaming");
+      B.style.background="#27ae60"; B.textContent="🔴 Talking…"; L.textContent="🔴 live → "+cam+" — talk now"; this._pipe(); };
+    this._ws.onerror=()=>{ this._log("ws error event"); };
+    this._ws.onclose=(e)=>{ clearTimeout(this._timer); this._log("ws CLOSE code="+e.code+" reason="+(e.reason||"(none)")+" opened="+this._opened);
+      if(!this._opened){
+        let m="⚠️ Connection failed (code "+e.code+").";
+        if(e.code===1006) m="⚠️ Can't reach the bridge ("+host+") — network/hairpin. On Wi-Fi add a local DNS rewrite for this host (see README).";
+        else if(e.code===1008||e.code===4401||e.code===4403) m="⛔ Unauthorized — check the card 'token' matches the bridge TALK_TOKEN.";
+        L.textContent=m;
+      }
+      if(this._on) this._end();
+    };
   }
-  _stop(){
-    if(!this._on)return; this._on=false;
-    const B=this._els.ptt,cams=this._cfg.cameras||[];
-    B.style.background="#c0392b"; B.textContent="🎙️ Hold to Talk"+(cams.length===1?" — "+cams[0]:"");
-    this._els.log.textContent="idle";
-    try{this._node.disconnect();this._stream.getTracks().forEach(t=>t.stop());this._ws.close();this._ctx.close();}catch(e){}
+  _pipe(){
+    this._ctx=new (window.AudioContext||window.webkitAudioContext)();
+    if(this._ctx.state==="suspended"){ this._ctx.resume().catch(()=>{}); }
+    const src=this._ctx.createMediaStreamSource(this._stream);
+    this._node=this._ctx.createScriptProcessor(2048,1,1);
+    this._sent=0;
+    this._node.onaudioprocess=e=>{
+      if(!this._on||!this._ws||this._ws.readyState!=1) return;
+      const inp=e.inputBuffer.getChannelData(0),r=this._ctx.sampleRate/8000;
+      const n=Math.floor(inp.length/r),out=new Int16Array(n);
+      for(let i=0;i<n;i++){let v=inp[Math.floor(i*r)];v=Math.max(-1,Math.min(1,v));out[i]=v<0?v*32768:v*32767;}
+      this._ws.send(out.buffer);
+      const before=this._sent; this._sent+=n;
+      if(Math.floor(this._sent/8000)>Math.floor(before/8000)) this._log("streamed "+Math.floor(this._sent/8000)+"s");
+    };
+    src.connect(this._node); this._node.connect(this._ctx.destination);
+    this._log("audio pipeline @"+this._ctx.sampleRate+"Hz");
+  }
+  _end(msg){
+    const wasOn=this._on; this._on=false;
+    try{this._timer&&clearTimeout(this._timer);}catch(e){}
+    try{this._node&&this._node.disconnect();}catch(e){}
+    try{this._stream&&this._stream.getTracks().forEach(t=>t.stop());}catch(e){}
+    try{this._ws&&this._ws.close();}catch(e){}
+    try{this._ctx&&this._ctx.close();}catch(e){}
+    const cams=this._cfg.cameras||[];
+    this._els.ptt.style.background="#c0392b";
+    this._els.ptt.textContent="🎙️ Hold to Talk"+(cams.length===1?" — "+cams[0]:"");
+    if(msg) this._els.log.textContent=msg;
+    if(wasOn) this._log("ended"+(this._sent?(" ("+Math.floor((this._sent||0)/8000)+"s sent)"):""));
+    this._sent=0;
   }
 }
 if(!customElements.get("xm-ptt-card")) customElements.define("xm-ptt-card", XmPttCard);
@@ -356,4 +422,7 @@ app=web.Application(client_max_size=20*1024*1024)
 app.add_routes([web.post("/say",say),web.post("/play",play),web.get("/ws",ws_handler),
                 web.get("/talk",talk_page),web.get("/xm_ptt.js",ptt_card),web.get("/mic",talk_page),web.get("/cams",cams),web.get("/healthz",health)])
 if __name__=="__main__":
-    web.run_app(app, host="0.0.0.0", port=int(os.environ.get("PORT","8090")))
+    port=int(os.environ.get("PORT","8090"))
+    log.info("xm-talk bridge starting on :%d — cams=%s token=%s",
+             port, list(CAMS.keys()), "on" if TOKEN else "off")
+    web.run_app(app, host="0.0.0.0", port=port, access_log=log)

@@ -1,6 +1,8 @@
 """Notify entities: one per camera. message -> spoken out the camera speaker."""
 from __future__ import annotations
 
+import logging
+
 import aiohttp
 
 from homeassistant.components.notify import NotifyEntity
@@ -11,6 +13,8 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import CONF_BRIDGE_URL, CONF_CAMS, CONF_VOICE, DOMAIN
+
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
@@ -43,9 +47,24 @@ class XMCamTalkNotify(NotifyEntity):
 
     async def async_send_message(self, message: str, title: str | None = None) -> None:
         session = async_get_clientsession(self.hass)
-        async with session.post(
-            f"{self._url}/say",
-            json={"cam": self._cam, "text": message, "voice": self._voice},
-            timeout=aiohttp.ClientTimeout(total=30),
-        ) as resp:
-            resp.raise_for_status()
+        _LOGGER.debug(
+            "Speaking on %s via %s/say (%d chars)", self._cam, self._url, len(message)
+        )
+        try:
+            async with session.post(
+                f"{self._url}/say",
+                json={"cam": self._cam, "text": message, "voice": self._voice},
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as resp:
+                body = await resp.text()
+                if resp.status != 200:
+                    _LOGGER.error(
+                        "Bridge returned HTTP %s speaking on %s: %s",
+                        resp.status, self._cam, body[:200],
+                    )
+                    resp.raise_for_status()
+                _LOGGER.debug("Bridge reply for %s: %s", self._cam, body[:200])
+        except aiohttp.ClientError as err:
+            _LOGGER.error("Failed to reach bridge %s speaking on %s: %s",
+                          self._url, self._cam, err)
+            raise

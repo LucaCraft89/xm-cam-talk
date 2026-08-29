@@ -1,6 +1,8 @@
 """Config flow for XM Camera Talk."""
 from __future__ import annotations
 
+import logging
+
 import aiohttp
 import voluptuous as vol
 
@@ -8,6 +10,8 @@ from homeassistant import config_entries
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import CONF_BRIDGE_URL, CONF_CAMS, CONF_VOICE, DOMAIN
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class XMCamTalkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -20,14 +24,18 @@ class XMCamTalkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             url = user_input[CONF_BRIDGE_URL].rstrip("/")
             session = async_get_clientsession(self.hass)
+            _LOGGER.debug("Probing bridge at %s/cams", url)
             try:
                 async with session.get(
                     f"{url}/cams", timeout=aiohttp.ClientTimeout(total=8)
                 ) as resp:
+                    resp.raise_for_status()
                     cams = (await resp.json())["cams"]
-            except Exception:  # noqa: BLE001 - any failure = cannot connect
+            except Exception as err:  # noqa: BLE001 - any failure = cannot connect
+                _LOGGER.warning("Could not reach bridge %s/cams: %s", url, err)
                 errors["base"] = "cannot_connect"
             else:
+                _LOGGER.info("Bridge %s reachable, cameras: %s", url, cams)
                 if not cams:
                     errors["base"] = "no_cams"
                 else:
