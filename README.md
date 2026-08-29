@@ -57,6 +57,11 @@ docker compose up -d --build
 **per-device iCSee username/password**, not `admin` (admin is rejected by the
 firmware). Example:
 
+> **Where to find the per-device username/password:** in the **iCSee** app, open
+> the camera's **Settings → Device Information → Device Login**. Tap the
+> **closed-eye icon** next to the username and the password to reveal them.
+> (These are per-device credentials — `admin` is rejected by the firmware.)
+
 ```yaml
 environment:
   CAMS: '{"front":["192.168.1.50","user1","pass1"],"yard":["192.168.1.51","user2","pass2"]}'
